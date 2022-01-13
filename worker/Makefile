@@ -63,7 +63,7 @@ ifeq ($(wildcard $(PIP_DIR)),)
 		echo "Installation failed, likely because PIP is unavailable, if you are on Debian/Ubuntu or derivative please install the python3-pip package"
 	# Install `meson` and `ninja` using `pip` into custom location, so we don't
 	# depend on system-wide installation.
-	$(PYTHON) -m pip install --upgrade --target=$(PIP_DIR) $(PIP_BUILD_BINARIES) meson ninja
+	$(PYTHON) -m pip install --upgrade --target=$(PIP_DIR) $(PIP_BUILD_BINARIES) meson==0.60.3 ninja
 endif
 
 setup: meson-ninja
