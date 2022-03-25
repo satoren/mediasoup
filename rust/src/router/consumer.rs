@@ -395,7 +395,13 @@ impl Inner {
         if !self.closed.swap(true, Ordering::SeqCst) {
             debug!("close()");
 
-            self.handlers.close.call_simple();
+            let handlers = self.handlers.clone();
+
+            self.executor
+                .spawn(async move {
+                    handlers.close.call_simple();
+                })
+                .detach();
 
             let subscription_handlers: Vec<_> = mem::take(&mut self.subscription_handlers.lock());
 
