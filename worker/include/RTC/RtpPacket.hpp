@@ -589,7 +589,7 @@ namespace RTC
 			return this->payloadDescriptorHandler->IsKeyFrame();
 		}
 
-		RtpPacket* Clone() const;
+		RtpPacket* Clone(const uint8_t* buffer) const;
 
 		void RtxEncode(uint8_t payloadType, uint32_t ssrc, uint16_t seq);
 
@@ -632,10 +632,7 @@ namespace RTC
 		uint8_t payloadPadding{ 0u };
 		size_t size{ 0u }; // Full size of the packet in bytes.
 		// Codecs
-		std::shared_ptr<Codecs::PayloadDescriptorHandler> payloadDescriptorHandler;
-		// Buffer where this packet is allocated, can be `nullptr` if packet was
-		// parsed from externally provided buffer.
-		uint8_t* buffer{ nullptr };
+		std::unique_ptr<Codecs::PayloadDescriptorHandler> payloadDescriptorHandler;
 	};
 } // namespace RTC
 

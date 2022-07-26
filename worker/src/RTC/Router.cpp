@@ -796,22 +796,15 @@ namespace RTC
 
 		auto& consumers = this->mapProducerConsumers.at(producer);
 
-		if (!consumers.empty())
+		for (auto* consumer : consumers)
 		{
-			// Clone the packet so it holds its own buffer, usable for future
-			// retransmissions.
-			std::shared_ptr<RTC::RtpPacket> sharedPacket(packet->Clone());
+			// Update MID RTP extension value.
+			const auto& mid = consumer->GetRtpParameters().mid;
 
-			for (auto* consumer : consumers)
-			{
-				// Update MID RTP extension value.
-				const auto& mid = consumer->GetRtpParameters().mid;
+			if (!mid.empty())
+				packet->UpdateMid(mid);
 
-				if (!mid.empty())
-					packet->UpdateMid(mid);
-
-				consumer->SendRtpPacket(sharedPacket);
-			}
+			consumer->SendRtpPacket(packet);
 		}
 
 		auto it = this->mapProducerRtpObservers.find(producer);

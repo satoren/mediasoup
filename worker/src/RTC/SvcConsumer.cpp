@@ -532,7 +532,7 @@ namespace RTC
 		return desiredBitrate;
 	}
 
-	void SvcConsumer::SendRtpPacket(std::shared_ptr<RTC::RtpPacket> packet)
+	void SvcConsumer::SendRtpPacket(RTC::RtpPacket* packet)
 	{
 		MS_TRACE();
 
@@ -636,10 +636,10 @@ namespace RTC
 		if (this->rtpStream->ReceivePacket(packet))
 		{
 			// Send the packet.
-			this->listener->OnConsumerSendRtpPacket(this, packet.get());
+			this->listener->OnConsumerSendRtpPacket(this, packet);
 
 			// May emit 'trace' event.
-			EmitTraceEventRtpAndKeyFrameTypes(packet.get());
+			EmitTraceEventRtpAndKeyFrameTypes(packet);
 		}
 		else
 		{
@@ -897,7 +897,10 @@ namespace RTC
 			}
 		}
 
-		this->rtpStream = new RTC::RtpStreamSend(this, params, this->rtpParameters.mid);
+		// Create a RtpStreamSend for sending a single media stream.
+		size_t bufferSize = params.useNack ? 600u : 0u;
+
+		this->rtpStream = new RTC::RtpStreamSend(this, params, bufferSize);
 		this->rtpStreams.push_back(this->rtpStream);
 
 		// If the Consumer is paused, tell the RtpStreamSend.

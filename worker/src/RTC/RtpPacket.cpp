@@ -147,11 +147,6 @@ namespace RTC
 	RtpPacket::~RtpPacket()
 	{
 		MS_TRACE();
-
-		if (this->buffer)
-		{
-			delete[] this->buffer;
-		}
 	}
 
 	void RtpPacket::Dump() const
@@ -636,13 +631,11 @@ namespace RTC
 		SetPayloadPaddingFlag(false);
 	}
 
-	RtpPacket* RtpPacket::Clone() const
+	RtpPacket* RtpPacket::Clone(const uint8_t* buffer) const
 	{
 		MS_TRACE();
 
-		auto* buffer = new uint8_t[MtuSize + 100];
-		auto* ptr    = const_cast<uint8_t*>(buffer);
-
+		auto* ptr = const_cast<uint8_t*>(buffer);
 		size_t numBytes{ 0 };
 
 		// Copy the minimum header.
@@ -711,10 +704,6 @@ namespace RTC
 		packet->frameMarkingExtensionId      = this->frameMarkingExtensionId;
 		packet->ssrcAudioLevelExtensionId    = this->ssrcAudioLevelExtensionId;
 		packet->videoOrientationExtensionId  = this->videoOrientationExtensionId;
-		// Assign the payload descriptor handler.
-		packet->payloadDescriptorHandler = this->payloadDescriptorHandler;
-		// Store allocated buffer.
-		packet->buffer = buffer;
 
 		return packet;
 	}
