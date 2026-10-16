@@ -450,15 +450,21 @@ namespace RTC
 
 		// Calculate the number of bytes to shift (may be negative if the packet did
 		// already have header extension).
-		int16_t shift{ 0 };
+		// NOTE: Use a signed wide type. Both `extensionsTotalSize` and
+		// `GetHeaderExtensionLength()` are `size_t`, and a received packet's header
+		// extension can be up to ~262 KB, so the delta does not fit in `int16_t`.
+		// Truncating it there wraps a large shrink into a large positive shift,
+		// causing `std::memmove()` below to write past the packet's buffer.
+		std::ptrdiff_t shift{ 0 };
 
 		if (this->headerExtension)
 		{
-			shift = static_cast<int16_t>(extensionsTotalSize - GetHeaderExtensionLength());
+			shift = static_cast<std::ptrdiff_t>(extensionsTotalSize) -
+			        static_cast<std::ptrdiff_t>(GetHeaderExtensionLength());
 		}
 		else
 		{
-			shift = 4 + static_cast<int16_t>(extensionsTotalSize);
+			shift = 4 + static_cast<std::ptrdiff_t>(extensionsTotalSize);
 		}
 
 		if (this->headerExtension && shift != 0)
