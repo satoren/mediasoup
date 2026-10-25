@@ -494,6 +494,167 @@ test('getProducerRtpParametersMapping(), getConsumableRtpParameters(), getConsum
 	});
 });
 
+test('getProducerRtpParametersMapping() and canConsume() with H265 succeed', () => {
+	const mediaCodecs: mediasoup.types.RouterRtpCodecCapability[] = [
+		{
+			kind: 'video',
+			mimeType: 'video/H265',
+			clockRate: 90000,
+			parameters: {
+				'profile-id': 1,
+				'tier-flag': 0,
+				'level-id': 93,
+			},
+		},
+	];
+
+	const routerRtpCapabilities = ortc.generateRouterRtpCapabilities(mediaCodecs);
+
+	expect(routerRtpCapabilities.codecs?.[0]?.mimeType).toBe('video/H265');
+
+	const rtpParameters: mediasoup.types.RtpParameters = {
+		codecs: [
+			{
+				mimeType: 'video/H265',
+				payloadType: 111,
+				clockRate: 90000,
+				parameters: {
+					'profile-id': 1,
+					'tier-flag': 0,
+					// Different level-id must be accepted.
+					'level-id': 120,
+				},
+			},
+		],
+		headerExtensions: [],
+		encodings: [{ ssrc: 11111111 }],
+		rtcp: {
+			cname: 'qwerty1234',
+		},
+	};
+
+	const rtpMapping = ortc.getProducerRtpParametersMapping(
+		rtpParameters,
+		routerRtpCapabilities
+	);
+
+	expect(rtpMapping.codecs).toEqual([
+		{
+			payloadType: 111,
+			mappedPayloadType: routerRtpCapabilities.codecs![0]!.preferredPayloadType,
+		},
+	]);
+
+	const consumableRtpParameters = ortc.getConsumableRtpParameters(
+		'video',
+		rtpParameters,
+		routerRtpCapabilities,
+		rtpMapping
+	);
+
+	expect(consumableRtpParameters.codecs[0]!.mimeType).toBe('video/H265');
+	expect(consumableRtpParameters.codecs[0]!.parameters).toEqual({
+		'profile-id': 1,
+		'tier-flag': 0,
+		'level-id': 120,
+	});
+
+	// Default values of profile-id (1), tier-flag (0) and tx-mode ('SRST')
+	// must be assumed when not given.
+	expect(
+		ortc.canConsume(consumableRtpParameters, {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/H265',
+					preferredPayloadType: 102,
+					clockRate: 90000,
+					parameters: { 'level-id': 93 },
+				},
+			],
+		})
+	).toBe(true);
+
+	expect(
+		ortc.canConsume(consumableRtpParameters, {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/H265',
+					preferredPayloadType: 102,
+					clockRate: 90000,
+					parameters: { 'profile-id': 2 },
+				},
+			],
+		})
+	).toBe(false);
+
+	expect(
+		ortc.canConsume(consumableRtpParameters, {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/H265',
+					preferredPayloadType: 102,
+					clockRate: 90000,
+					parameters: { 'tier-flag': 1 },
+				},
+			],
+		})
+	).toBe(false);
+
+	expect(
+		ortc.canConsume(consumableRtpParameters, {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/H265',
+					preferredPayloadType: 102,
+					clockRate: 90000,
+					parameters: { 'tx-mode': 'MRST' },
+				},
+			],
+		})
+	).toBe(false);
+});
+
+test('getProducerRtpParametersMapping() with incompatible H265 params throws UnsupportedError', () => {
+	const mediaCodecs: mediasoup.types.RouterRtpCodecCapability[] = [
+		{
+			kind: 'video',
+			mimeType: 'video/H265',
+			clockRate: 90000,
+			parameters: {
+				'profile-id': 1,
+			},
+		},
+	];
+
+	const routerRtpCapabilities = ortc.generateRouterRtpCapabilities(mediaCodecs);
+
+	for (const parameters of [{ 'profile-id': 2 }, { 'tier-flag': 1 }]) {
+		const rtpParameters: mediasoup.types.RtpParameters = {
+			codecs: [
+				{
+					mimeType: 'video/H265',
+					payloadType: 111,
+					clockRate: 90000,
+					parameters,
+				},
+			],
+			headerExtensions: [],
+			encodings: [{ ssrc: 11111111 }],
+			rtcp: {
+				cname: 'qwerty1234',
+			},
+		};
+
+		expect(() =>
+			ortc.getProducerRtpParametersMapping(rtpParameters, routerRtpCapabilities)
+		).toThrow(UnsupportedError);
+	}
+});
+
 test('getProducerRtpParametersMapping() with incompatible params throws UnsupportedError', () => {
 	const mediaCodecs: mediasoup.types.RouterRtpCodecCapability[] = [
 		{

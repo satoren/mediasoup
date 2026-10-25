@@ -356,6 +356,9 @@ pub enum MimeTypeVideo {
     /// H264
     #[serde(rename = "video/H264")]
     H264,
+    /// H265
+    #[serde(rename = "video/H265")]
+    H265,
     /// AV1
     #[serde(rename = "video/AV1")]
     AV1,
@@ -378,6 +381,7 @@ impl FromStr for MimeTypeVideo {
             "video/vp8" => Ok(Self::Vp8),
             "video/vp9" => Ok(Self::Vp9),
             "video/h264" => Ok(Self::H264),
+            "video/h265" => Ok(Self::H265),
             "video/av1" => Ok(Self::AV1),
             "video/rtx" => Ok(Self::Rtx),
             "video/red" => Ok(Self::Red),
@@ -408,6 +412,7 @@ impl MimeTypeVideo {
             Self::Vp8 => "video/VP8",
             Self::Vp9 => "video/VP9",
             Self::H264 => "video/H264",
+            Self::H265 => "video/H265",
             Self::AV1 => "video/AV1",
             Self::Rtx => "video/rtx",
             Self::Red => "video/red",

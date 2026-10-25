@@ -270,6 +270,98 @@ test('webRtcTransport1.produce() without header extensions and rtcp succeeds', a
 	audioProducer.close();
 }, 2000);
 
+test('transport.produce() and transport.consume() with H265 succeed', async () => {
+	const router = await ctx.worker!.createRouter({
+		mediaCodecs: [
+			{
+				kind: 'video',
+				mimeType: 'video/H265',
+				clockRate: 90000,
+				parameters: {
+					'profile-id': 1,
+					'tier-flag': 0,
+					'level-id': 93,
+				},
+			},
+		],
+	});
+	const transport1 = await router.createWebRtcTransport({
+		listenIps: ['127.0.0.1'],
+	});
+	const transport2 = await router.createWebRtcTransport({
+		listenIps: ['127.0.0.1'],
+	});
+
+	const videoProducer = await transport1.produce({
+		kind: 'video',
+		rtpParameters: {
+			mid: 'VIDEO',
+			codecs: [
+				{
+					mimeType: 'video/H265',
+					payloadType: 112,
+					clockRate: 90000,
+					parameters: {
+						'profile-id': 1,
+						'tier-flag': 0,
+						'level-id': 120,
+					},
+					rtcpFeedback: [{ type: 'nack' }, { type: 'nack', parameter: 'pli' }],
+				},
+			],
+			encodings: [
+				{ ssrc: 33333330, scalabilityMode: 'L1T3' },
+				{ ssrc: 33333331, scalabilityMode: 'L1T3' },
+			],
+			rtcp: {
+				cname: 'video-h265',
+			},
+		},
+	});
+
+	expect(videoProducer.kind).toBe('video');
+	expect(videoProducer.type).toBe('simulcast');
+	expect(videoProducer.rtpParameters.codecs[0]!.mimeType).toBe('video/H265');
+
+	const videoConsumer = await transport2.consume({
+		producerId: videoProducer.id,
+		rtpCapabilities: {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/H265',
+					preferredPayloadType: 100,
+					clockRate: 90000,
+					parameters: { 'level-id': 93 },
+					rtcpFeedback: [{ type: 'nack' }, { type: 'nack', parameter: 'pli' }],
+				},
+			],
+		},
+	});
+
+	expect(videoConsumer.kind).toBe('video');
+	expect(videoConsumer.type).toBe('simulcast');
+	expect(videoConsumer.rtpParameters.codecs[0]!.mimeType).toBe('video/H265');
+
+	// A remote endpoint with a different H265 profile cannot consume it.
+	expect(
+		router.canConsume({
+			producerId: videoProducer.id,
+			rtpCapabilities: {
+				codecs: [
+					{
+						kind: 'video',
+						mimeType: 'video/H265',
+						preferredPayloadType: 100,
+						clockRate: 90000,
+						parameters: { 'profile-id': 2 },
+					},
+				],
+			},
+		})
+	).toBe(false);
+}, 2000);
+
 test('webRtcTransport1.produce() with wrong arguments rejects with TypeError', async () => {
 	await expect(
 		ctx.webRtcTransport1!.produce({

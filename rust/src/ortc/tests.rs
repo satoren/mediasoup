@@ -747,3 +747,137 @@ fn get_producer_rtp_parameters_mapping_rtx_apt_is_not_media_codec() {
         Err(RtpParametersMappingError::MissingMediaCodecForRtx { payload_type: 112 }),
     ));
 }
+
+fn h265_rtp_parameters(parameters: RtpCodecParametersParameters) -> RtpParameters {
+    RtpParameters {
+        mid: None,
+        codecs: vec![RtpCodecParameters::Video {
+            mime_type: MimeTypeVideo::H265,
+            payload_type: 111,
+            clock_rate: NonZeroU32::new(90000).unwrap(),
+            parameters,
+            rtcp_feedback: vec![],
+        }],
+        header_extensions: vec![],
+        encodings: vec![RtpEncodingParameters {
+            ssrc: Some(11111111),
+            ..RtpEncodingParameters::default()
+        }],
+        rtcp: RtcpParameters {
+            cname: Some("qwerty1234".to_string()),
+            ..RtcpParameters::default()
+        },
+        msid: None,
+    }
+}
+
+fn h265_rtp_capabilities(parameters: RtpCodecParametersParameters) -> RtpCapabilities {
+    RtpCapabilities {
+        codecs: vec![RtpCodecCapability::Video {
+            mime_type: MimeTypeVideo::H265,
+            preferred_payload_type: Some(102),
+            clock_rate: NonZeroU32::new(90000).unwrap(),
+            parameters,
+            rtcp_feedback: vec![],
+        }],
+        header_extensions: vec![],
+    }
+}
+
+#[test]
+fn get_producer_rtp_parameters_mapping_can_consume_h265_succeeds() {
+    let media_codecs = vec![RtpCodecCapability::Video {
+        mime_type: MimeTypeVideo::H265,
+        preferred_payload_type: None,
+        clock_rate: NonZeroU32::new(90000).unwrap(),
+        parameters: RtpCodecParametersParameters::from([
+            ("profile-id", 1_u32.into()),
+            ("tier-flag", 0_u32.into()),
+            ("level-id", 93_u32.into()),
+        ]),
+        rtcp_feedback: vec![],
+    }];
+
+    let router_rtp_capabilities = generate_router_rtp_capabilities(media_codecs)
+        .expect("Failed to generate router RTP capabilities");
+
+    // Different level-id must be accepted.
+    let rtp_parameters = h265_rtp_parameters(RtpCodecParametersParameters::from([
+        ("profile-id", 1_u32.into()),
+        ("tier-flag", 0_u32.into()),
+        ("level-id", 120_u32.into()),
+    ]));
+
+    let rtp_mapping =
+        get_producer_rtp_parameters_mapping(&rtp_parameters, &router_rtp_capabilities)
+            .expect("Failed to get producer RTP parameters mapping");
+
+    assert_eq!(rtp_mapping.codecs.len(), 1);
+    assert_eq!(rtp_mapping.codecs[0].payload_type, 111);
+
+    let consumable_rtp_parameters = get_consumable_rtp_parameters(
+        MediaKind::Video,
+        &rtp_parameters,
+        &router_rtp_capabilities,
+        &rtp_mapping,
+    );
+
+    assert_eq!(
+        consumable_rtp_parameters.codecs[0].mime_type(),
+        MimeType::Video(MimeTypeVideo::H265)
+    );
+
+    // Default values of profile-id (1), tier-flag (0) and tx-mode ("SRST") must
+    // be assumed when not given.
+    assert_eq!(
+        can_consume(
+            &consumable_rtp_parameters,
+            &h265_rtp_capabilities(RtpCodecParametersParameters::from([(
+                "level-id",
+                93_u32.into()
+            )])),
+        ),
+        Ok(true)
+    );
+
+    for parameters in [
+        RtpCodecParametersParameters::from([("profile-id", 2_u32.into())]),
+        RtpCodecParametersParameters::from([("tier-flag", 1_u32.into())]),
+        RtpCodecParametersParameters::from([("tx-mode", "MRST".into())]),
+    ] {
+        assert_eq!(
+            can_consume(
+                &consumable_rtp_parameters,
+                &h265_rtp_capabilities(parameters)
+            ),
+            Ok(false)
+        );
+    }
+}
+
+#[test]
+fn get_producer_rtp_parameters_mapping_h265_unsupported() {
+    let media_codecs = vec![RtpCodecCapability::Video {
+        mime_type: MimeTypeVideo::H265,
+        preferred_payload_type: None,
+        clock_rate: NonZeroU32::new(90000).unwrap(),
+        parameters: RtpCodecParametersParameters::from([("profile-id", 1_u32.into())]),
+        rtcp_feedback: vec![],
+    }];
+
+    let router_rtp_capabilities = generate_router_rtp_capabilities(media_codecs)
+        .expect("Failed to generate router RTP capabilities");
+
+    for parameters in [
+        RtpCodecParametersParameters::from([("profile-id", 2_u32.into())]),
+        RtpCodecParametersParameters::from([("tier-flag", 1_u32.into())]),
+    ] {
+        assert!(matches!(
+            get_producer_rtp_parameters_mapping(
+                &h265_rtp_parameters(parameters),
+                &router_rtp_capabilities
+            ),
+            Err(RtpParametersMappingError::UnsupportedCodec { .. }),
+        ));
+    }
+}

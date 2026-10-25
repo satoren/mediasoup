@@ -1012,6 +1012,35 @@ function matchCodecs(
 			break;
 		}
 
+		// NOTE: 'level-id' is not checked since, as per RFC 7798, it can differ
+		// in each direction.
+		case 'video/h265': {
+			if (strict) {
+				const aProfileId = aCodec.parameters!['profile-id'] || 1;
+				const bProfileId = bCodec.parameters!['profile-id'] || 1;
+
+				if (aProfileId !== bProfileId) {
+					return false;
+				}
+
+				const aTierFlag = aCodec.parameters!['tier-flag'] || 0;
+				const bTierFlag = bCodec.parameters!['tier-flag'] || 0;
+
+				if (aTierFlag !== bTierFlag) {
+					return false;
+				}
+
+				const aTxMode = aCodec.parameters!['tx-mode'] || 'SRST';
+				const bTxMode = bCodec.parameters!['tx-mode'] || 'SRST';
+
+				if (aTxMode !== bTxMode) {
+					return false;
+				}
+			}
+
+			break;
+		}
+
 		case 'video/vp9': {
 			if (strict) {
 				const aProfileId = aCodec.parameters!['profile-id'] || 0;

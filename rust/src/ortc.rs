@@ -1244,6 +1244,52 @@ fn match_codecs(
                 };
             }
         }
+        // NOTE: `level-id` is not checked since, as per RFC 7798, it can differ in each
+        // direction.
+        MimeType::Video(MimeTypeVideo::H265) => {
+            // If strict matching check profile-id, tier-flag and tx-mode.
+            if strict {
+                let profile_id_a = codec_a
+                    .parameters
+                    .get("profile-id")
+                    .unwrap_or(&RtpCodecParametersParametersValue::Number(1));
+                let profile_id_b = codec_b
+                    .parameters
+                    .get("profile-id")
+                    .unwrap_or(&RtpCodecParametersParametersValue::Number(1));
+
+                if profile_id_a != profile_id_b {
+                    return Err(());
+                }
+
+                let tier_flag_a = codec_a
+                    .parameters
+                    .get("tier-flag")
+                    .unwrap_or(&RtpCodecParametersParametersValue::Number(0));
+                let tier_flag_b = codec_b
+                    .parameters
+                    .get("tier-flag")
+                    .unwrap_or(&RtpCodecParametersParametersValue::Number(0));
+
+                if tier_flag_a != tier_flag_b {
+                    return Err(());
+                }
+
+                let default_tx_mode = RtpCodecParametersParametersValue::String("SRST".into());
+                let tx_mode_a = codec_a
+                    .parameters
+                    .get("tx-mode")
+                    .unwrap_or(&default_tx_mode);
+                let tx_mode_b = codec_b
+                    .parameters
+                    .get("tx-mode")
+                    .unwrap_or(&default_tx_mode);
+
+                if tx_mode_a != tx_mode_b {
+                    return Err(());
+                }
+            }
+        }
         MimeType::Video(MimeTypeVideo::Vp9) => {
             // If strict matching check profile-id.
             if strict {

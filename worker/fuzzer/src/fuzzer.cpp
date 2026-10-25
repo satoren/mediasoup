@@ -18,6 +18,7 @@
 #include "RTC/RTP/Codecs/FuzzerAV1.hpp"
 #include "RTC/RTP/Codecs/FuzzerDependencyDescriptor.hpp"
 #include "RTC/RTP/Codecs/FuzzerH264.hpp"
+#include "RTC/RTP/Codecs/FuzzerH265.hpp"
 #include "RTC/RTP/Codecs/FuzzerOpus.hpp"
 #include "RTC/RTP/Codecs/FuzzerVP8.hpp"
 #include "RTC/RTP/Codecs/FuzzerVP9.hpp"
@@ -202,6 +203,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t len)
 		FuzzerRtcRtpCodecsVP8::Fuzz(data, len);
 		FuzzerRtcRtpCodecsVP9::Fuzz(data, len);
 		FuzzerRtcRtpCodecsH264::Fuzz(data, len);
+		FuzzerRtcRtpCodecsH265::Fuzz(data, len);
 		FuzzerRtcRtpCodecsAV1::Fuzz(data, len);
 		FuzzerRtcRtpCodecsDependencyDescriptor::Fuzz(data, len);
 	}

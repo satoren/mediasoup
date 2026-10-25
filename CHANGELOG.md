@@ -2,6 +2,8 @@
 
 ### NEXT
 
+- Add H265 video codec support with key frame detection and temporal layers ([issue #1789](https://github.com/versatica/mediasoup/issues/1789) by @satoren).
+
 ### 3.31.0
 
 - Fix simulcast RTP timestamp jumps on layer switch and frozen retransmission buffer ([PR #2002](https://github.com/versatica/mediasoup/pull/2002)).

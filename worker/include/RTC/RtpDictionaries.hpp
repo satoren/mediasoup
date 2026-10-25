@@ -48,6 +48,7 @@ namespace RTC
 			VP8 = 200,
 			VP9,
 			H264,
+			H265,
 			AV1,
 			// Complementary codecs:
 			CN = 300,
