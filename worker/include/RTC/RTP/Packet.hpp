@@ -27,7 +27,7 @@ namespace RTC
 		 *
 		 * @see RFC 3550.
 		 */
-		class Packet : public Serializable, public Codecs::DependencyDescriptor::Listener
+		class Packet : public Serializable
 		{
 		public:
 			/**
@@ -541,9 +541,16 @@ namespace RTC
 
 			bool ReadDependencyDescriptor(
 			  std::unique_ptr<Codecs::DependencyDescriptor>& dependencyDescriptor,
-			  std::unique_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
+			  std::shared_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
 			    templateDependencyStructure) const;
 
+			/**
+			 * Replace the value of the Dependency Descriptor extension.
+			 *
+			 * @remarks
+			 * - A longer value is only written if the bytes that follow the current
+			 *   one are padding.
+			 */
 			bool UpdateDependencyDescriptor(const uint8_t* data, size_t len);
 
 			bool ReadVideoOrientation(bool& camera, bool& flip, uint16_t& rotation) const;
@@ -812,6 +819,21 @@ namespace RTC
 			void RestorePayload();
 
 			/**
+			 * Maximum length the Dependency Descriptor extension may take once
+			 * rewritten by the payload descriptor handler, or 0 if it is never
+			 * rewritten.
+			 */
+			uint8_t GetDependencyDescriptorMaxLength() const
+			{
+				if (!this->payloadDescriptorHandler)
+				{
+					return 0;
+				}
+
+				return this->payloadDescriptorHandler->GetDependencyDescriptorMaxLength();
+			}
+
+			/**
 			 * Whether the payload contains a video keyframe.
 			 */
 			bool IsKeyFrame() const
@@ -964,10 +986,6 @@ namespace RTC
 			 *   the process.
 			 */
 			void SetExtensionLength(uint8_t id, uint8_t len);
-
-			/* Pure virtual methods inherited from Codecs::DependencyDescriptor::Listener. */
-		public:
-			void OnDependencyDescriptorUpdated(const uint8_t* data, size_t len) override;
 
 #ifdef MS_RTC_LOGGER_RTP
 		public:

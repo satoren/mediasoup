@@ -1280,6 +1280,96 @@ test('transport.consume() from a multiple-encoding producer is of type simulcast
 	expect(consumer.type).toBe('simulcast');
 }, 2000);
 
+test('transport.consume() from an AV1 multiple-encoding producer is of type simulcast', async () => {
+	const router = await ctx.worker!.createRouter({
+		mediaCodecs: [
+			{
+				kind: 'video',
+				mimeType: 'video/AV1',
+				clockRate: 90000,
+				rtcpFeedback: [
+					{ type: 'nack', parameter: '' },
+					{ type: 'nack', parameter: 'pli' },
+				],
+			},
+		],
+	});
+	const transport1 = await router.createWebRtcTransport({
+		listenIps: ['127.0.0.1'],
+	});
+	const transport2 = await router.createWebRtcTransport({
+		listenIps: ['127.0.0.1'],
+	});
+
+	const producer = await transport1.produce({
+		kind: 'video',
+		rtpParameters: {
+			codecs: [
+				{
+					mimeType: 'video/AV1',
+					payloadType: 96,
+					clockRate: 90000,
+					rtcpFeedback: [
+						{ type: 'nack', parameter: '' },
+						{ type: 'nack', parameter: 'pli' },
+					],
+				},
+			],
+			headerExtensions: [
+				{
+					uri: 'https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension',
+					id: 11,
+				},
+			],
+			encodings: [
+				{ ssrc: 11111111, scalabilityMode: 'L1T3' },
+				{ ssrc: 22222222, scalabilityMode: 'L1T3' },
+				{ ssrc: 33333333, scalabilityMode: 'L1T3' },
+			],
+			rtcp: { cname: 'test' },
+		},
+	});
+
+	expect(producer.type).toBe('simulcast');
+
+	const consumer = await transport2.consume({
+		producerId: producer.id,
+		rtpCapabilities: {
+			codecs: [
+				{
+					kind: 'video',
+					mimeType: 'video/AV1',
+					preferredPayloadType: 101,
+					clockRate: 90000,
+					rtcpFeedback: [
+						{ type: 'nack', parameter: '' },
+						{ type: 'nack', parameter: 'pli' },
+					],
+				},
+			],
+			headerExtensions: [],
+		},
+		preferredLayers: { spatialLayer: 1, temporalLayer: 1 },
+	});
+
+	expect(consumer.type).toBe('simulcast');
+	expect(consumer.rtpParameters.codecs[0]!.mimeType).toBe('video/AV1');
+	expect(consumer.rtpParameters.encodings).toMatchObject([
+		{ scalabilityMode: 'L3T3' },
+	]);
+	expect(consumer.preferredLayers).toEqual({
+		spatialLayer: 1,
+		temporalLayer: 1,
+	});
+
+	const dump = await consumer.dump();
+
+	expect(dump.type).toBe('simulcast');
+	expect(dump.consumableRtpEncodings!.length).toBe(3);
+
+	router.close();
+}, 2000);
+
 test('consumer.setPriority() succeed', async () => {
 	const videoConsumer = await ctx.webRtcTransport2!.consume({
 		producerId: ctx.videoProducer!.id,

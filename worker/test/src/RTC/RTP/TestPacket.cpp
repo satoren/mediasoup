@@ -1789,6 +1789,121 @@ SCENARIO("RTP Packet", "[serializable][rtp][packet]")
 		REQUIRE((packet->GetLength() == 36));
 	}
 
+	SECTION("Packet::UpdateDependencyDescriptor() only grows into padding bytes")
+	{
+		constexpr uint8_t DependencyDescriptorId{ 7 };
+		constexpr uint8_t VideoOrientationId{ 11 };
+
+		// clang-format off
+		uint8_t dependencyDescriptor[] = { 0x80, 0x01, 0x2F, 0x00, 0x00, 0x00 };
+		uint8_t longerDependencyDescriptor[] = { 0xC1, 0x01, 0x2F, 0x40, 0x80 };
+		uint8_t videoOrientation[] = { 0x01 };
+		// clang-format on
+
+		uint8_t extenLen;
+		const uint8_t* extenValue;
+
+		{
+			std::unique_ptr<RTC::RTP::Packet> packet{ RTC::RTP::Packet::Factory(
+				rtpCommon::FactoryBuffer, sizeof(rtpCommon::FactoryBuffer)) };
+
+			// The Dependency Descriptor takes 6 bytes, of which the last 3 ones are
+			// left as padding.
+			std::vector<RTC::RTP::Packet::Extension> extensions;
+
+			extensions.emplace_back(
+			  RTC::RtpHeaderExtensionUri::Type::DEPENDENCY_DESCRIPTOR,
+			  DependencyDescriptorId,
+			  sizeof(dependencyDescriptor),
+			  dependencyDescriptor);
+			extensions.emplace_back(
+			  RTC::RtpHeaderExtensionUri::Type::VIDEO_ORIENTATION,
+			  VideoOrientationId,
+			  sizeof(videoOrientation),
+			  videoOrientation);
+
+			packet->SetExtensions(RTC::RTP::Packet::ExtensionsType::OneByte, extensions);
+
+			REQUIRE(packet->UpdateDependencyDescriptor(dependencyDescriptor, 3));
+
+			extenValue = packet->GetExtensionValue(DependencyDescriptorId, extenLen);
+
+			REQUIRE(extenLen == 3);
+			REQUIRE(std::memcmp(extenValue, dependencyDescriptor, 3) == 0);
+
+			// It can grow into the padding.
+			REQUIRE(packet->UpdateDependencyDescriptor(
+			  longerDependencyDescriptor, sizeof(longerDependencyDescriptor)));
+
+			extenValue = packet->GetExtensionValue(DependencyDescriptorId, extenLen);
+
+			REQUIRE(extenLen == sizeof(longerDependencyDescriptor));
+			REQUIRE(
+			  std::memcmp(extenValue, longerDependencyDescriptor, sizeof(longerDependencyDescriptor)) == 0);
+
+			// Shrink it again.
+			REQUIRE(packet->UpdateDependencyDescriptor(dependencyDescriptor, 3));
+
+			// But not beyond the padding, where the next extension is.
+			// clang-format off
+			uint8_t tooLongDependencyDescriptor[] = { 0x80, 0x01, 0x2F, 0x40, 0x80, 0x00, 0x00 };
+			// clang-format on
+
+			REQUIRE(!packet->UpdateDependencyDescriptor(
+			  tooLongDependencyDescriptor, sizeof(tooLongDependencyDescriptor)));
+
+			extenValue = packet->GetExtensionValue(DependencyDescriptorId, extenLen);
+
+			REQUIRE(extenLen == 3);
+
+			// The next extension is untouched and the packet can be parsed again.
+			REQUIRE(packet->Validate(/*storeExtensions*/ true));
+
+			extenValue = packet->GetExtensionValue(VideoOrientationId, extenLen);
+
+			REQUIRE(extenLen == sizeof(videoOrientation));
+			REQUIRE(extenValue[0] == videoOrientation[0]);
+
+			extenValue = packet->GetExtensionValue(DependencyDescriptorId, extenLen);
+
+			REQUIRE(extenLen == 3);
+
+			// Empty values are not written.
+			REQUIRE(!packet->UpdateDependencyDescriptor(dependencyDescriptor, 0));
+		}
+
+		{
+			std::unique_ptr<RTC::RTP::Packet> packet{ RTC::RTP::Packet::Factory(
+				rtpCommon::FactoryBuffer, sizeof(rtpCommon::FactoryBuffer)) };
+
+			// The Dependency Descriptor is the last extension, followed by the padding
+			// of the header extension.
+			std::vector<RTC::RTP::Packet::Extension> extensions;
+
+			extensions.emplace_back(
+			  RTC::RtpHeaderExtensionUri::Type::VIDEO_ORIENTATION,
+			  VideoOrientationId,
+			  sizeof(videoOrientation),
+			  videoOrientation);
+			extensions.emplace_back(
+			  RTC::RtpHeaderExtensionUri::Type::DEPENDENCY_DESCRIPTOR,
+			  DependencyDescriptorId,
+			  3,
+			  dependencyDescriptor);
+
+			packet->SetExtensions(RTC::RTP::Packet::ExtensionsType::OneByte, extensions);
+
+			// 2 + 4 bytes, padded to 8, so there is 2 bytes of padding.
+			REQUIRE(packet->GetHeaderExtensionValueLength() == 8);
+			REQUIRE(packet->UpdateDependencyDescriptor(dependencyDescriptor, 5));
+			REQUIRE(!packet->UpdateDependencyDescriptor(dependencyDescriptor, 6));
+
+			extenValue = packet->GetExtensionValue(DependencyDescriptorId, extenLen);
+
+			REQUIRE(extenLen == 5);
+		}
+	}
+
 	SECTION("Packet::SetPayload(), SetPayloadLength() and packet::RemovePayload() succeed")
 	{
 		std::unique_ptr<RTC::RTP::Packet> packet{ RTC::RTP::Packet::Factory(

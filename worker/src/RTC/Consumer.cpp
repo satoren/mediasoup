@@ -318,8 +318,10 @@ namespace RTC
 
 				RTC::RTP::Codecs::EncodingContext::Params params;
 
-				params.spatialLayers  = encoding.spatialLayers;
-				params.temporalLayers = encoding.temporalLayers;
+				params.spatialLayers               = encoding.spatialLayers;
+				params.temporalLayers              = encoding.temporalLayers;
+				params.simulcast                   = true;
+				params.rewriteDependencyDescriptor = this->rtpHeaderExtensionIds.dependencyDescriptor != 0;
 
 				std::unique_ptr<RTC::RTP::Codecs::EncodingContext> encodingContext(
 				  RTC::RTP::Codecs::Tools::GetEncodingContext(mediaCodec->mimeType, params));
@@ -396,9 +398,10 @@ namespace RTC
 
 				RTC::RTP::Codecs::EncodingContext::Params params;
 
-				params.spatialLayers  = encoding.spatialLayers;
-				params.temporalLayers = encoding.temporalLayers;
-				params.ksvc           = encoding.ksvc;
+				params.spatialLayers               = encoding.spatialLayers;
+				params.temporalLayers              = encoding.temporalLayers;
+				params.ksvc                        = encoding.ksvc;
+				params.rewriteDependencyDescriptor = this->rtpHeaderExtensionIds.dependencyDescriptor != 0;
 
 				std::unique_ptr<RTC::RTP::Codecs::EncodingContext> encodingContext(
 				  RTC::RTP::Codecs::Tools::GetEncodingContext(mediaCodec->mimeType, params));

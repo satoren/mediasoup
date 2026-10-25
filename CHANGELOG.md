@@ -2,6 +2,8 @@
 
 ### NEXT
 
+- AV1: Add simulcast support, detect key frames without Dependency Descriptor and rewrite the Dependency Descriptor (frame numbers, template ids and active decode targets) for Consumers that negotiate it ([#2011](https://github.com/versatica/mediasoup/issues/2011)).
+
 ### 3.31.0
 
 - Fix simulcast RTP timestamp jumps on layer switch and frozen retransmission buffer ([PR #2002](https://github.com/versatica/mediasoup/pull/2002)).

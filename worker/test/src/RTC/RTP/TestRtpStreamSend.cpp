@@ -27,6 +27,8 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 {
 	constexpr std::string_view RetransmissionTimerLabel{ "rtp-stream-send-retransmissions" };
 
+	constexpr uint8_t DependencyDescriptorExtensionId{ 12 };
+
 	class TestRtpStreamListener : public RTC::RTP::RtpStreamSend::Listener
 	{
 	public:
@@ -39,10 +41,22 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 		  RTC::RTP::RtpStreamSend* /*rtpStream*/, RTC::RTP::Packet* packet) override
 		{
 			this->retransmittedPackets.push_back(packet);
+
+			// Keep the Dependency Descriptor as retransmitted, since it is restored
+			// afterwards.
+			uint8_t extenLen;
+			const uint8_t* extenValue =
+			  packet->GetExtensionValue(DependencyDescriptorExtensionId, extenLen);
+
+			if (extenValue)
+			{
+				this->retransmittedDependencyDescriptors.emplace_back(extenValue, extenValue + extenLen);
+			}
 		}
 
 	public:
 		std::vector<RTC::RTP::Packet*> retransmittedPackets;
+		std::vector<std::vector<uint8_t>> retransmittedDependencyDescriptors;
 	};
 
 	const auto createRtpPacket = [](uint8_t* buffer, size_t len, uint16_t seq, uint32_t timestamp)
@@ -104,7 +118,7 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 	const auto parseAV1RtpPacket =
 	  [](
 	    RTC::RTP::Packet* packet,
-	    std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor::TemplateDependencyStructure>&
+	    std::shared_ptr<RTC::RTP::Codecs::DependencyDescriptor::TemplateDependencyStructure>&
 	      templateDependencyStructure) -> void
 	{
 		std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor> dependencyDescriptor;
@@ -113,7 +127,8 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 
 		REQUIRE(dependencyDescriptor);
 
-		auto* const payloadDescriptor = RTC::RTP::Codecs::AV1::Parse(dependencyDescriptor);
+		auto* const payloadDescriptor = RTC::RTP::Codecs::AV1::Parse(
+		  packet->GetPayload(), packet->GetPayloadLength(), dependencyDescriptor);
 		auto* const payloadDescriptorHandler =
 		  new RTC::RTP::Codecs::AV1::PayloadDescriptorHandler(payloadDescriptor);
 
@@ -849,6 +864,9 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 		 * 	 spatialLayer: 0
 		 * 	 temporalLayer: 0
 		 * 	</DependencyDescriptor>
+		 *
+		 * NOTE: The Dependency Descriptor is followed by padding bytes, as the
+		 * Producer makes room for it to be rewritten.
 		 */
 		uint8_t rtpBuffer3[] =
 		{
@@ -858,14 +876,14 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 			0xBE, 0xDE, 0x00, 0x04,
 			0x22, 0x8A, 0x03, 0xE5,
 			0xD0, 0x00, 0x31, 0x00,
-			0x17, 0xC2, 0x40, 0x00,
-			0x01, 0x40, 0x31, 0x00
+			0x17, 0x40, 0x31, 0xC2,
+			0x40, 0x00, 0x01, 0x00
 		};
 		// clang-format on
 
 		RTC::RTP::HeaderExtensionIds headerExtensionIds{};
 
-		headerExtensionIds.dependencyDescriptor = 12;
+		headerExtensionIds.dependencyDescriptor = DependencyDescriptorExtensionId;
 
 		// packet1 [seq:1, timestamp:1]
 		const auto packet1(createRtpPacket(rtpBuffer1, sizeof(rtpBuffer1), 1, 1));
@@ -910,8 +928,9 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 		// Create two AV1 encoding contexts.
 		RTC::RTP::Codecs::EncodingContext::Params params;
 
-		params.spatialLayers  = 1;
-		params.temporalLayers = 2;
+		params.spatialLayers               = 1;
+		params.temporalLayers              = 2;
+		params.rewriteDependencyDescriptor = true;
 
 		RTC::RTP::Codecs::AV1::EncodingContext context1(params);
 
@@ -927,7 +946,7 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 		context2.SetTargetSpatialLayer(0);
 		context2.SetTargetTemporalLayer(1);
 
-		std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor::TemplateDependencyStructure>
+		std::shared_ptr<RTC::RTP::Codecs::DependencyDescriptor::TemplateDependencyStructure>
 		  templateDependencyStructure;
 
 		// Parse the first packet for the shake of having the template dependency structure.
@@ -980,8 +999,8 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 
 		packet3->SetSsrc(params2.ssrc);
 
-		// Whenever packet3 is Nacked on stream2, it must always be set a
-		// 00000011 (S0_T1) active decode target bitmas.
+		// Whenever packet3 is Nacked on stream2, it must not be set any active
+		// decode target bitmask since all of them (S0_T1) are forwarded.
 		stream2->ReceivePacket(packet3.get(), sharedPacket);
 
 		// Create a NACK item that requests the third packet.
@@ -999,32 +1018,41 @@ SCENARIO("RtpStreamSend", "[rtp][rtcp][nack][rtpstream][rtpstreamsend]")
 
 		REQUIRE(testRtpStreamListener1.retransmittedPackets.size() == 1);
 
-		auto* packet = testRtpStreamListener1.retransmittedPackets[0];
+		REQUIRE(testRtpStreamListener1.retransmittedDependencyDescriptors.size() == 1);
 
 		// Parse DD and check bitmask.
-		std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor> dependencyDescriptor4;
-
-		packet->ReadDependencyDescriptor(dependencyDescriptor4, templateDependencyStructure);
+		const auto& dependencyDescriptorData4 =
+		  testRtpStreamListener1.retransmittedDependencyDescriptors[0];
+		const std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor> dependencyDescriptor4(
+		  RTC::RTP::Codecs::DependencyDescriptor::Parse(
+		    dependencyDescriptorData4.data(),
+		    dependencyDescriptorData4.size(),
+		    templateDependencyStructure));
 
 		REQUIRE(dependencyDescriptor4);
-		// TODO: Enable once we write DD.
-		// REQUIRE(dependencyDescriptor4->activeDecodeTargetsBitmask == 0b0000000000000001);
+		REQUIRE(dependencyDescriptor4->frameNumber == 1);
+		REQUIRE(dependencyDescriptor4->activeDecodeTargetsBitmask == 0b0000000000000001);
 
 		// Process the NACK packet on stream2.
 		stream2->ReceiveNack(std::addressof(nackPacket));
 
 		REQUIRE(testRtpStreamListener2.retransmittedPackets.size() == 1);
 
-		packet = testRtpStreamListener2.retransmittedPackets[0];
+		REQUIRE(testRtpStreamListener2.retransmittedDependencyDescriptors.size() == 1);
 
 		// Parse DD and check bitmask.
-		std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor> dependencyDescriptor5;
-
-		packet->ReadDependencyDescriptor(dependencyDescriptor5, templateDependencyStructure);
+		const auto& dependencyDescriptorData5 =
+		  testRtpStreamListener2.retransmittedDependencyDescriptors[0];
+		const std::unique_ptr<RTC::RTP::Codecs::DependencyDescriptor> dependencyDescriptor5(
+		  RTC::RTP::Codecs::DependencyDescriptor::Parse(
+		    dependencyDescriptorData5.data(),
+		    dependencyDescriptorData5.size(),
+		    templateDependencyStructure));
 
 		REQUIRE(dependencyDescriptor5);
-		// TODO: Enable once we write DD.
-		// REQUIRE(dependencyDescriptor5->activeDecodeTargetsBitmask == 0b0000000000000011);
+		REQUIRE(dependencyDescriptor5->frameNumber == 1);
+		// All decode targets are forwarded, so there is no need to tell them.
+		REQUIRE(!dependencyDescriptor5->activeDecodeTargetsBitmask.has_value());
 	}
 
 	SECTION("packets get retransmitted as long as they don't exceed MaxRetransmissionDelayForVideoMs")

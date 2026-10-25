@@ -31,6 +31,7 @@ namespace RTC
 								case RTC::RtpCodecMimeType::Subtype::VP8:
 								case RTC::RtpCodecMimeType::Subtype::VP9:
 								case RTC::RtpCodecMimeType::Subtype::H264:
+								case RTC::RtpCodecMimeType::Subtype::AV1:
 								{
 									return true;
 								}
@@ -52,7 +53,7 @@ namespace RTC
 				static void ProcessRtpPacket(
 				  RTP::Packet* packet,
 				  const RTC::RtpCodecMimeType& mimeType,
-				  std::unique_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
+				  std::shared_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
 				    templateDependencyStructure)
 				{
 					switch (mimeType.type)
@@ -133,6 +134,7 @@ namespace RTC
 									{
 										case RTC::RtpCodecMimeType::Subtype::VP8:
 										case RTC::RtpCodecMimeType::Subtype::H264:
+										case RTC::RtpCodecMimeType::Subtype::AV1:
 										{
 											return true;
 										}

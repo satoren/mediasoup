@@ -1043,7 +1043,7 @@ namespace RTC
 
 		bool Packet::ReadDependencyDescriptor(
 		  std::unique_ptr<Codecs::DependencyDescriptor>& dependencyDescriptor,
-		  std::unique_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
+		  std::shared_ptr<Codecs::DependencyDescriptor::TemplateDependencyStructure>&
 		    templateDependencyStructure) const
 		{
 			MS_TRACE();
@@ -1057,8 +1057,13 @@ namespace RTC
 			const uint8_t* extenValue =
 			  GetExtensionValue(this->headerExtensionIds.dependencyDescriptor, extenLen);
 
-			auto* value = Codecs::DependencyDescriptor::Parse(
-			  extenValue, extenLen, const_cast<Packet*>(this), templateDependencyStructure);
+			if (!extenValue)
+			{
+				return false;
+			}
+
+			auto* value =
+			  Codecs::DependencyDescriptor::Parse(extenValue, extenLen, templateDependencyStructure);
 
 			if (!value)
 			{
@@ -1085,15 +1090,37 @@ namespace RTC
 				return false;
 			}
 
-			if (len > extenLen)
+			if (len == 0)
 			{
-				MS_WARN_TAG(
-				  rtp,
-				  "no enough space for updated dependency descriptor [needed:%zu, available:%" PRIu8 "]",
-				  len,
-				  extenLen);
+				MS_WARN_TAG(rtp, "empty dependency descriptor");
 
 				return false;
+			}
+
+			// A longer value can only take the padding bytes that follow the current
+			// one, if any, since those do not belong to any other extension (whose
+			// first byte is never 0).
+			if (len > extenLen)
+			{
+				const auto extenOffset = static_cast<size_t>(extenValue - GetHeaderExtensionValue());
+				const size_t maxLen = HasOneByteExtensions() ? 16 : Consts::TwoBytesRtpExtensionMaxLength;
+				bool fits           = len <= maxLen && extenOffset + len <= GetHeaderExtensionValueLength();
+
+				for (size_t idx{ extenLen }; fits && idx < len; ++idx)
+				{
+					fits = extenValue[idx] == 0;
+				}
+
+				if (!fits)
+				{
+					MS_WARN_TAG(
+					  rtp,
+					  "no enough space for updated dependency descriptor [needed:%zu, available:%" PRIu8 "]",
+					  len,
+					  extenLen);
+
+					return false;
+				}
 			}
 
 			std::memcpy(extenValue, data, len);
@@ -1805,13 +1832,6 @@ namespace RTC
 
 				extension->len = len;
 			}
-		}
-
-		void Packet::OnDependencyDescriptorUpdated(const uint8_t* data, size_t len)
-		{
-			MS_TRACE();
-
-			UpdateDependencyDescriptor(data, len);
 		}
 	} // namespace RTP
 } // namespace RTC

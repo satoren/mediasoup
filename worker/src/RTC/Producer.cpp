@@ -1243,6 +1243,9 @@ namespace RTC
 			uint8_t* extenValue;
 			uint8_t extenLen;
 			uint8_t* bufferPtr{ buffer };
+			// Proxied Dependency Descriptor (without the room made for it).
+			const uint8_t* dependencyDescriptorValue{ nullptr };
+			uint8_t dependencyDescriptorLen{ 0 };
 
 			// Add urn:ietf:params:rtp-hdrext:sdes:mid.
 			{
@@ -1423,15 +1426,29 @@ namespace RTC
 
 				if (extenValue)
 				{
+					// Consumers may rewrite the descriptor into a longer one, so make room
+					// for it with padding bytes that follow it.
+					// NOTE: Not so much that One-Byte extensions could not be used anymore.
+					dependencyDescriptorValue = bufferPtr;
+					dependencyDescriptorLen   = extenLen;
+
+					uint8_t reservedLen = std::max(extenLen, packet->GetDependencyDescriptorMaxLength());
+
+					if (extenLen <= 16)
+					{
+						reservedLen = std::min<uint8_t>(reservedLen, 16);
+					}
+
 					std::memcpy(bufferPtr, extenValue, extenLen);
+					std::memset(bufferPtr + extenLen, 0, reservedLen - extenLen);
 
 					extensions.emplace_back(
 					  /*type*/ RTC::RtpHeaderExtensionUri::Type::DEPENDENCY_DESCRIPTOR,
 					  /*id*/ static_cast<uint8_t>(RTC::RtpHeaderExtensionUri::Type::DEPENDENCY_DESCRIPTOR),
-					  /*len*/ extenLen,
+					  /*len*/ reservedLen,
 					  /*value*/ bufferPtr);
 
-					bufferPtr += extenLen;
+					bufferPtr += reservedLen;
 				}
 
 				// Proxy urn:3gpp:video-orientation.
@@ -1493,6 +1510,12 @@ namespace RTC
 			}
 
 			packet->SetExtensions(RTC::RTP::Packet::ExtensionsType::Auto, extensions);
+
+			// Leave the room made for the Dependency Descriptor as padding.
+			if (dependencyDescriptorValue)
+			{
+				packet->UpdateDependencyDescriptor(dependencyDescriptorValue, dependencyDescriptorLen);
+			}
 		}
 
 		return true;

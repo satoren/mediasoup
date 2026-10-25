@@ -631,6 +631,50 @@ test('transport.produce() with multiple encodings is of type simulcast', async (
 	expect(producer.type).toBe('simulcast');
 }, 2000);
 
+test('transport.produce() with AV1 and multiple encodings is of type simulcast', async () => {
+	const router = await ctx.worker!.createRouter({
+		mediaCodecs: [
+			{
+				kind: 'video',
+				mimeType: 'video/AV1',
+				clockRate: 90000,
+			},
+		],
+	});
+	const transport = await router.createWebRtcTransport({
+		listenIps: ['127.0.0.1'],
+	});
+
+	const producer = await transport.produce({
+		kind: 'video',
+		rtpParameters: {
+			codecs: [
+				{
+					mimeType: 'video/AV1',
+					payloadType: 96,
+					clockRate: 90000,
+				},
+			],
+			headerExtensions: [
+				{
+					uri: 'https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension',
+					id: 11,
+				},
+			],
+			encodings: [
+				{ rid: 'r0', scalabilityMode: 'L1T3' },
+				{ rid: 'r1', scalabilityMode: 'L1T3' },
+				{ rid: 'r2', scalabilityMode: 'L1T3' },
+			],
+			rtcp: { cname: 'test' },
+		},
+	});
+
+	expect(producer.type).toBe('simulcast');
+
+	router.close();
+}, 2000);
+
 test('producer.dump() succeeds', async () => {
 	const audioProducer = await ctx.webRtcTransport1!.produce(
 		ctx.audioProducerOptions

@@ -96,6 +96,11 @@ namespace RTC
 					uint8_t spatialLayers{ 1 };
 					uint8_t temporalLayers{ 1 };
 					bool ksvc{ false };
+					// Whether the encodings are simulcast streams (rather than SVC layers).
+					bool simulcast{ false };
+					// Whether the Dependency Descriptor must be rewritten, which is when the
+					// receiver gets it.
+					bool rewriteDependencyDescriptor{ false };
 				};
 
 			public:
@@ -116,6 +121,14 @@ namespace RTC
 				bool IsKSvc() const
 				{
 					return this->params.ksvc;
+				}
+				bool IsSimulcast() const
+				{
+					return this->params.simulcast;
+				}
+				bool RewritesDependencyDescriptor() const
+				{
+					return this->params.rewriteDependencyDescriptor;
 				}
 				int16_t GetTargetSpatialLayer() const
 				{
@@ -236,6 +249,14 @@ namespace RTC
 				virtual uint8_t GetSpatialLayer() const                                           = 0;
 				virtual uint8_t GetTemporalLayer() const                                          = 0;
 				virtual bool IsKeyFrame() const                                                   = 0;
+				/**
+				 * Maximum length the Dependency Descriptor of the packet may take once
+				 * rewritten, or 0 if it is never rewritten.
+				 */
+				virtual uint8_t GetDependencyDescriptorMaxLength() const
+				{
+					return 0;
+				}
 			};
 		} // namespace Codecs
 	} // namespace RTP
