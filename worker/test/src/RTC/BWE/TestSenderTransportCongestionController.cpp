@@ -8,7 +8,11 @@
 #include "Utils.hpp"
 #include "test/include/RTC/RTP/rtpCommon.hpp"
 #include "mocks/include/MockShared.hpp"
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <deque>
+#include <random>
 #include <string_view>
 #include <vector>
 
@@ -673,5 +677,397 @@ SCENARIO("BWE SenderTransportCongestionController", "[bwe][sendertransportconges
 		// Aiming far above what the application could ever send would measure room
 		// that nothing is going to use, so the burst is held to what is wanted.
 		REQUIRE(totalBytes(bounded) < totalBytes(unbounded));
+	}
+}
+
+// Helpers of the scenarios reproducing
+// https://github.com/versatica/mediasoup/issues/2045.
+namespace issue2045
+{
+	// The clock starts well away from zero so that a mistake taking a time for a
+	// duration doesn't go unnoticed.
+	constexpr int64_t InitialTimeUs{ 100000000 };
+	// The remote clock has nothing to do with ours.
+	constexpr int64_t RemoteTimeUs{ 1000000000000 };
+	constexpr int64_t StartBitrate{ 300000 };
+	constexpr int64_t MaxBitrate{ 20000000 };
+	constexpr uint32_t AudioSsrc{ 1111 };
+	constexpr uint32_t VideoSsrc{ 2222 };
+	constexpr uint8_t TransportWideCc01Id{ 5 };
+	constexpr uint8_t AbsSendTimeId{ 4 };
+	// What every packet carries on top of its payload (RTP header plus both
+	// extensions).
+	constexpr size_t RtpOverhead{ 24 };
+	// One Opus track of 40 kbps, sent as a packet every 20 ms.
+	constexpr int64_t AudioBitrate{ 40000 };
+	constexpr int64_t AudioIntervalUs{ 20000 };
+	// One simulcast video track whose layers are what the allocator picks from.
+	constexpr std::array<int64_t, 3> VideoLayerBitrates{ 150000, 400000, 1500000 };
+	constexpr int64_t VideoFrameIntervalUs{ 1000000 / 30 };
+	constexpr size_t MaxVideoPayloadSize{ 1000 };
+	// What the Consumers would send were the link to allow it all.
+	constexpr int64_t DesiredBitrate{ AudioBitrate + VideoLayerBitrates.back() };
+	// How often the remote endpoint sends feedback.
+	constexpr int64_t FeedbackIntervalUs{ 100000 };
+	// How often a new delay offset is drawn on the link.
+	constexpr int64_t JitterIntervalUs{ 20000 };
+	// Simulation step.
+	constexpr int64_t StepUs{ 1000 };
+	constexpr int64_t RunTimeUs{ 120 * 1000 * 1000 };
+	// The target is only looked at once it has had time to settle.
+	constexpr int64_t WarmUpTimeUs{ 60 * 1000 * 1000 };
+	constexpr int64_t SampleIntervalUs{ 1000 * 1000 };
+
+	class TestListener : public RTC::BWE::SenderTransportCongestionController::Listener
+	{
+	public:
+		void OnSenderTransportCongestionControllerTargetBitrate(
+		  RTC::BWE::SenderTransportCongestionController* /*senderTransportCongestionController*/,
+		  int64_t /*targetBitrate*/) override
+		{
+		}
+
+		void OnSenderTransportCongestionControllerSendRtpProbePacket(
+		  RTC::BWE::SenderTransportCongestionController* /*senderTransportCongestionController*/,
+		  RTC::RTP::Packet* packet,
+		  int64_t sequenceNumber) override
+		{
+			this->probes.emplace_back(sequenceNumber, packet->GetLength());
+		}
+
+	public:
+		// Probe packets that went out and are yet to be put on the link.
+		std::vector<std::pair<int64_t /*sequenceNumber*/, size_t /*size*/>> probes;
+	};
+
+	// A packet on its way through the link.
+	struct InFlightPacket
+	{
+		int64_t sequenceNumber;
+		int64_t arrivalTimeUs;
+		bool lost;
+	};
+
+	struct Result
+	{
+		// Target sampled once per second after the warm up.
+		std::vector<int64_t> targets;
+		// Video bitrate actually sent after the warm up (bps).
+		int64_t videoBitrate{ 0 };
+	};
+
+	// Runs a whole call over a link that delays every packet by `baseDelayUs`
+	// plus an offset drawn uniformly from [-jitterUs, +jitterUs] every 20 ms, and
+	// never reorders anything, so packets bunch up whenever the offset drops.
+	// Each packet is lost with a probability of `lossPercent` percent. The
+	// capacity of the link is unlimited.
+	Result RunCall(int64_t baseDelayUs, int64_t jitterUs, uint32_t lossPercent)
+	{
+		int64_t nowUs{ InitialTimeUs };
+
+		mocks::MockShared shared(/*getTimeUs*/
+		                         [&nowUs]() -> int64_t
+		                         {
+			                         return nowUs;
+		                         });
+
+		TestListener listener;
+
+		RTC::BWE::SenderTransportCongestionController controller(
+		  std::addressof(listener),
+		  std::addressof(shared),
+		  { .startBitrate = StartBitrate,
+			  .minBitrate   = RTC::Consts::BweMinBitrate,
+			  .maxBitrate   = MaxBitrate });
+
+		auto* processTimer = shared.GetTimer("sender-transport-congestion-controller-process");
+		auto* probeTimer   = shared.GetTimer("probing-scheduler-next-probe");
+
+		REQUIRE(processTimer);
+		REQUIRE(probeTimer);
+
+		controller.SetEnableProbing(true);
+		controller.SetNetworkAvailable(true);
+		controller.SetDesiredBitrate(DesiredBitrate);
+
+		// NOTE: A fixed seed and no standard distribution, so that every platform
+		// draws the very same offsets.
+		std::mt19937 rng(2045);
+		std::mt19937 lossRng(2046);
+		int64_t jitterOffsetUs{ 0 };
+		int64_t nextJitterDrawUs{ nowUs };
+		int64_t prevArrivalTimeUs{ 0 };
+		std::deque<InFlightPacket> inFlight;
+		uint16_t audioRtpSequenceNumber{ 0 };
+		uint16_t videoRtpSequenceNumber{ 0 };
+		int64_t nextAudioUs{ nowUs };
+		int64_t nextVideoFrameUs{ nowUs };
+		int64_t nextFeedbackUs{ nowUs + FeedbackIntervalUs };
+		int64_t nextSampleUs{ InitialTimeUs + WarmUpTimeUs };
+		int64_t videoBytesAfterWarmUp{ 0 };
+		Result result;
+
+		// Puts a packet that just went out on the link.
+		const auto putOnLink = [&](int64_t sequenceNumber)
+		{
+			if (nowUs >= nextJitterDrawUs)
+			{
+				jitterOffsetUs =
+				  static_cast<int64_t>(rng() % static_cast<uint32_t>((2 * jitterUs) + 1)) - jitterUs;
+				nextJitterDrawUs += JitterIntervalUs;
+			}
+
+			// Never before the previous packet, which is what makes them bunch up.
+			const int64_t arrivalTimeUs = std::max(prevArrivalTimeUs, nowUs + baseDelayUs + jitterOffsetUs);
+
+			prevArrivalTimeUs = arrivalTimeUs;
+
+			inFlight.push_back({ sequenceNumber, arrivalTimeUs, (lossRng() % 100) < lossPercent });
+		};
+
+		const auto sendMediaPacket =
+		  [&](uint32_t ssrc, uint16_t rtpSequenceNumber, size_t payloadSize, bool isAudio)
+		{
+			std::unique_ptr<RTC::RTP::Packet> packet(
+			  RTC::RTP::Packet::Factory(rtpCommon::FactoryBuffer, sizeof(rtpCommon::FactoryBuffer)));
+
+			REQUIRE(packet);
+
+			packet->SetSsrc(ssrc);
+			packet->SetSequenceNumber(rtpSequenceNumber);
+
+			const std::vector<RTC::RTP::Packet::Extension> extensions{
+				{ RTC::RtpHeaderExtensionUri::Type::TRANSPORT_WIDE_CC_01,
+				 TransportWideCc01Id,				                                            /*len*/ 2,
+				 rtpCommon::DataBuffer                                                                                    },
+				{ RTC::RtpHeaderExtensionUri::Type::ABS_SEND_TIME,        AbsSendTimeId, /*len*/ 3, rtpCommon::DataBuffer }
+			};
+
+			packet->SetExtensions(RTC::RTP::Packet::ExtensionsType::OneByte, extensions);
+
+			RTC::RTP::HeaderExtensionIds headerExtensionIds;
+
+			headerExtensionIds.transportWideCc01 = TransportWideCc01Id;
+			headerExtensionIds.absSendTime       = AbsSendTimeId;
+
+			packet->AssignExtensionIds(headerExtensionIds);
+			packet->SetPayloadLength(payloadSize);
+
+			const auto sequenceNumber = controller.OnRtpPacketToBeSent(
+			  packet.get(),
+			  RTC::BWE::SenderTransportCongestionController::RtpPacketToBeSentOptions{ .isAudio = isAudio });
+
+			REQUIRE(sequenceNumber.has_value());
+
+			controller.OnRtpPacketSent(sequenceNumber, packet->GetLength(), nowUs);
+
+			// NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+			putOnLink(sequenceNumber.value());
+		};
+
+		// Reports every packet that arrived by the time the feedback left the
+		// remote endpoint, which takes the base delay to come back.
+		const auto sendFeedback = [&]()
+		{
+			const int64_t remoteNowUs = nowUs - baseDelayUs;
+
+			while (!inFlight.empty() && inFlight.front().arrivalTimeUs <= remoteNowUs)
+			{
+				// What never arrived cannot be the base of a feedback, and the ones
+				// that follow will tell it was lost.
+				if (inFlight.front().lost)
+				{
+					inFlight.pop_front();
+
+					continue;
+				}
+
+				constexpr uint32_t SenderSsrc{ 3333 };
+				constexpr uint32_t MediaSsrc{ 4444 };
+				constexpr size_t RtcpMtu{ 1200 };
+
+				RTC::RTCP::FeedbackRtpTransportPacket feedback(SenderSsrc, MediaSsrc);
+
+				feedback.SetBase(
+				  static_cast<uint16_t>(inFlight.front().sequenceNumber),
+				  RemoteTimeUs + (inFlight.front().arrivalTimeUs - InitialTimeUs));
+
+				while (!inFlight.empty() && inFlight.front().arrivalTimeUs <= remoteNowUs &&
+				       !feedback.IsFull())
+				{
+					const auto& inFlightPacket = inFlight.front();
+
+					if (inFlightPacket.lost)
+					{
+						inFlight.pop_front();
+
+						continue;
+					}
+
+					REQUIRE(
+					  feedback.AddPacket(
+					    static_cast<uint16_t>(inFlightPacket.sequenceNumber),
+					    RemoteTimeUs + (inFlightPacket.arrivalTimeUs - InitialTimeUs),
+					    RtcpMtu) == RTC::RTCP::FeedbackRtpTransportPacket::AddPacketResult::SUCCESS);
+
+					inFlight.pop_front();
+				}
+
+				feedback.Finish();
+
+				controller.ReceiveTransportWideCcFeedback(std::addressof(feedback), nowUs);
+			}
+		};
+
+		while (nowUs - InitialTimeUs < RunTimeUs)
+		{
+			processTimer->EvaluateHasExpired();
+
+			while (probeTimer->IsActive() && probeTimer->EvaluateHasExpired())
+			{
+			}
+
+			for (const auto& [sequenceNumber, size] : listener.probes)
+			{
+				controller.OnRtpPacketSent(sequenceNumber, size, nowUs);
+
+				putOnLink(sequenceNumber);
+			}
+
+			listener.probes.clear();
+
+			if (nowUs >= nextAudioUs)
+			{
+				constexpr auto AudioPayloadSize =
+				  static_cast<size_t>((AudioBitrate * AudioIntervalUs / 8000000)) - RtpOverhead;
+
+				sendMediaPacket(AudioSsrc, audioRtpSequenceNumber++, AudioPayloadSize, /*isAudio*/ true);
+
+				nextAudioUs += AudioIntervalUs;
+			}
+
+			if (nowUs >= nextVideoFrameUs)
+			{
+				// Like the allocator does, audio is served first and video gets the
+				// highest layer that fits in what is left.
+				const int64_t availableForVideo = controller.GetAvailableBitrate() - AudioBitrate;
+				int64_t videoBitrate{ 0 };
+
+				for (const auto layerBitrate : VideoLayerBitrates)
+				{
+					if (layerBitrate <= availableForVideo)
+					{
+						videoBitrate = layerBitrate;
+					}
+				}
+
+				auto frameBytes = static_cast<size_t>(videoBitrate * VideoFrameIntervalUs / 8000000);
+
+				if (nowUs - InitialTimeUs >= WarmUpTimeUs)
+				{
+					videoBytesAfterWarmUp += static_cast<int64_t>(frameBytes);
+				}
+
+				while (frameBytes > 0)
+				{
+					const size_t payloadSize = std::min(frameBytes, MaxVideoPayloadSize);
+
+					sendMediaPacket(VideoSsrc, videoRtpSequenceNumber++, payloadSize, /*isAudio*/ false);
+
+					frameBytes -= payloadSize;
+				}
+
+				nextVideoFrameUs += VideoFrameIntervalUs;
+			}
+
+			if (nowUs >= nextFeedbackUs)
+			{
+				sendFeedback();
+
+				nextFeedbackUs += FeedbackIntervalUs;
+			}
+
+			if (nowUs >= nextSampleUs)
+			{
+				result.targets.push_back(controller.GetAvailableBitrate());
+
+				nextSampleUs += SampleIntervalUs;
+			}
+
+			nowUs += StepUs;
+		}
+
+		result.videoBitrate = videoBytesAfterWarmUp * 8 * 1000000 / (RunTimeUs - WarmUpTimeUs);
+
+		return result;
+	}
+
+	int64_t Median(std::vector<int64_t> values)
+	{
+		REQUIRE(!values.empty());
+
+		std::ranges::sort(values);
+
+		return values.at(values.size() / 2);
+	}
+
+	// Without anything holding the link back the lowest video layer has to be
+	// sent at the very least.
+	constexpr int64_t MinExpectedTarget{ AudioBitrate + VideoLayerBitrates.front() };
+} // namespace issue2045
+
+SCENARIO(
+  "BWE SenderTransportCongestionController over a clean link with room to spare",
+  "[bwe][sendertransportcongestioncontroller][issue2045]")
+{
+	using namespace issue2045;
+
+	SECTION("a clean link keeps video flowing")
+	{
+		const auto result = RunCall(/*baseDelayUs*/ 0, /*jitterUs*/ 0, /*lossPercent*/ 0);
+
+		INFO("median target: " << Median(result.targets) << " bps");
+		INFO("video bitrate: " << result.videoBitrate << " bps");
+
+		REQUIRE(Median(result.targets) >= DesiredBitrate);
+		REQUIRE(result.videoBitrate >= VideoLayerBitrates.back() * 9 / 10);
+	}
+}
+
+// Reproduces https://github.com/versatica/mediasoup/issues/2045.
+//
+// A link with room to spare whose delay jitters around a fixed value makes the
+// target collapse, and once video has been dropped because of it the target
+// never comes back, since only audio is left to measure.
+//
+// TODO: Remove the `[!shouldfail]` tag once the issue is fixed.
+SCENARIO(
+  "BWE SenderTransportCongestionController over a jittery link with room to spare",
+  "[bwe][sendertransportcongestioncontroller][issue2045][!shouldfail]")
+{
+	using namespace issue2045;
+
+	SECTION("a far link (150 ms ± 30 ms) keeps video flowing")
+	{
+		const auto result = RunCall(/*baseDelayUs*/ 150000, /*jitterUs*/ 30000, /*lossPercent*/ 0);
+
+		INFO("median target: " << Median(result.targets) << " bps");
+		INFO("lowest target: " << *std::ranges::min_element(result.targets) << " bps");
+		INFO("video bitrate: " << result.videoBitrate << " bps");
+
+		CHECK(*std::ranges::min_element(result.targets) >= MinExpectedTarget);
+		CHECK(Median(result.targets) >= DesiredBitrate);
+	}
+
+	SECTION("a mobile link (60 ms ± 20 ms, 1% loss) keeps video flowing")
+	{
+		const auto result = RunCall(/*baseDelayUs*/ 60000, /*jitterUs*/ 20000, /*lossPercent*/ 1);
+
+		INFO("median target: " << Median(result.targets) << " bps");
+		INFO("lowest target: " << *std::ranges::min_element(result.targets) << " bps");
+		INFO("video bitrate: " << result.videoBitrate << " bps");
+
+		CHECK(*std::ranges::min_element(result.targets) >= MinExpectedTarget);
+		CHECK(Median(result.targets) >= DesiredBitrate);
 	}
 }
